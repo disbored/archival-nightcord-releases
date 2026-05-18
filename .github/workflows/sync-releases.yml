@@ -1,0 +1,126 @@
+name: Sync Upstream Releases
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Sync all releases and assets (additive only — never deletes)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM: nightcordoff/nightcordclient-releases
+          FORK: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          urlencode() {
+            python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$1"
+          }
+
+          echo "Fetching releases from upstream: $UPSTREAM"
+          RELEASES="[]"
+          PAGE=1
+          while true; do
+            BATCH=$(gh api "repos/$UPSTREAM/releases?per_page=30&page=$PAGE" --paginate=false)
+            COUNT=$(echo "$BATCH" | jq length)
+            echo "  Page $PAGE: $COUNT releases"
+            RELEASES=$(echo "$RELEASES $BATCH" | jq -s 'add')
+            [ "$COUNT" -lt 30 ] && break
+            PAGE=$((PAGE + 1))
+          done
+
+          TOTAL=$(echo "$RELEASES" | jq length)
+          echo "Total upstream releases: $TOTAL"
+          echo ""
+
+          echo "$RELEASES" | jq -c 'reverse | .[]' | while IFS= read -r release; do
+            TAG=$(echo "$release"        | jq -r '.tag_name')
+            NAME=$(echo "$release"       | jq -r '.name')
+            BODY=$(echo "$release"       | jq -r '.body // ""')
+            PRERELEASE=$(echo "$release" | jq -r '.prerelease')
+            DRAFT=$(echo "$release"      | jq -r '.draft')
+
+            echo "=== $TAG ==="
+
+            if ! gh api "repos/$FORK/git/refs/tags/$TAG" &>/dev/null 2>&1; then
+              echo "  Creating git tag $TAG in fork..."
+              DEFAULT_SHA=$(gh api "repos/$FORK/git/refs/heads/main" \
+                              --jq '.object.sha' 2>/dev/null \
+                           || gh api "repos/$FORK/git/refs/heads/master" \
+                              --jq '.object.sha')
+              gh api "repos/$FORK/git/refs" \
+                -X POST \
+                -f ref="refs/tags/$TAG" \
+                -f sha="$DEFAULT_SHA" >/dev/null
+            fi
+
+            # ── get or create the release in the fork ─────────────────────
+            FORK_RELEASE=$(gh api "repos/$FORK/releases/tags/$TAG" 2>/dev/null || true)
+
+            if [ -z "$FORK_RELEASE" ] || [ "$FORK_RELEASE" = "null" ]; then
+              echo "  Creating release..."
+              FORK_RELEASE=$(gh api "repos/$FORK/releases" \
+                -X POST \
+                -f tag_name="$TAG" \
+                -f name="$NAME" \
+                -f body="$BODY" \
+                -F prerelease="$PRERELEASE" \
+                -F draft="$DRAFT")
+              echo "  Created release id=$(echo "$FORK_RELEASE" | jq -r '.id')"
+            else
+              echo "  Release already exists — checking assets..."
+            fi
+
+            FORK_RELEASE_ID=$(echo "$FORK_RELEASE"   | jq -r '.id')
+            FORK_UPLOAD_URL=$(echo "$FORK_RELEASE"   | jq -r '.upload_url' | sed 's/{.*}//')
+
+            EXISTING_ASSETS=$(gh api "repos/$FORK/releases/$FORK_RELEASE_ID/assets" \
+                                --jq '[.[] | .name]')
+
+            UPSTREAM_ASSETS=$(gh api "repos/$UPSTREAM/releases/tags/$TAG" \
+                                --jq '.assets[]' 2>/dev/null || true)
+
+            if [ -z "$UPSTREAM_ASSETS" ]; then
+              echo "  No assets upstream for $TAG."
+              echo ""
+              continue
+            fi
+
+            echo "$UPSTREAM_ASSETS" | jq -c '.' | while IFS= read -r asset; do
+              ASSET_NAME=$(echo "$asset"         | jq -r '.name')
+              ASSET_URL=$(echo "$asset"          | jq -r '.browser_download_url')
+              ASSET_CONTENT_TYPE=$(echo "$asset" | jq -r '.content_type')
+
+              ALREADY=$(echo "$EXISTING_ASSETS" | jq -r --arg n "$ASSET_NAME" 'map(select(. == $n)) | length')
+              if [ "$ALREADY" -gt 0 ]; then
+                echo "    Skipping (already present): $ASSET_NAME"
+                continue
+              fi
+
+              echo "    Downloading: $ASSET_NAME"
+              curl -fsSL -o "/tmp/$ASSET_NAME" "$ASSET_URL"
+
+              echo "    Uploading:   $ASSET_NAME"
+              curl -fsSL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Content-Type: $ASSET_CONTENT_TYPE" \
+                --data-binary @"/tmp/$ASSET_NAME" \
+                "${FORK_UPLOAD_URL}?name=$(urlencode "$ASSET_NAME")" \
+                >/dev/null
+
+              rm -f "/tmp/$ASSET_NAME"
+              echo "    Done: $ASSET_NAME"
+            done
+
+            echo "  $TAG up to date."
+            echo ""
+          done
+
+          echo "Sync complete. Nothing was deleted."
