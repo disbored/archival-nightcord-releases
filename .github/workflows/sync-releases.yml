@@ -61,10 +61,9 @@ jobs:
                 -f sha="$DEFAULT_SHA" >/dev/null
             fi
 
-            # ── get or create the release in the fork ─────────────────────
-            FORK_RELEASE=$(gh api "repos/$FORK/releases/tags/$TAG" 2>/dev/null || true)
-
-            if [ -z "$FORK_RELEASE" ] || [ "$FORK_RELEASE" = "null" ]; then
+            if FORK_RELEASE=$(gh api "repos/$FORK/releases/tags/$TAG" 2>/dev/null); then
+              echo "  Release already exists — checking assets..."
+            else
               echo "  Creating release..."
               FORK_RELEASE=$(gh api "repos/$FORK/releases" \
                 -X POST \
@@ -74,15 +73,13 @@ jobs:
                 -F prerelease="$PRERELEASE" \
                 -F draft="$DRAFT")
               echo "  Created release id=$(echo "$FORK_RELEASE" | jq -r '.id')"
-            else
-              echo "  Release already exists — checking assets..."
             fi
 
-            FORK_RELEASE_ID=$(echo "$FORK_RELEASE"   | jq -r '.id')
-            FORK_UPLOAD_URL=$(echo "$FORK_RELEASE"   | jq -r '.upload_url' | sed 's/{.*}//')
+            FORK_RELEASE_ID=$(echo "$FORK_RELEASE" | jq -r '.id')
+            FORK_UPLOAD_URL=$(echo "$FORK_RELEASE" | jq -r '.upload_url' | sed 's/{.*}//')
 
             EXISTING_ASSETS=$(gh api "repos/$FORK/releases/$FORK_RELEASE_ID/assets" \
-                                --jq '[.[] | .name]')
+                                --jq '[.[] | .name]' 2>/dev/null || echo "[]")
 
             UPSTREAM_ASSETS=$(gh api "repos/$UPSTREAM/releases/tags/$TAG" \
                                 --jq '.assets[]' 2>/dev/null || true)
