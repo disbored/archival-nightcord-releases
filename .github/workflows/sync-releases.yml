@@ -104,11 +104,15 @@ jobs:
               echo "    Downloading: $ASSET_NAME"
               curl -fsSL -o "/tmp/$ASSET_NAME" "$ASSET_URL"
 
+              ASSET_SIZE=$(stat -c%s "/tmp/$ASSET_NAME"
+
               echo "    Uploading:   $ASSET_NAME"
               curl -fsSL \
+                -X POST \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Content-Type: $ASSET_CONTENT_TYPE" \
-                --data-binary @"/tmp/$ASSET_NAME" \
+                -H "Content-Length: $ASSET_SIZE" \
+                --upload-file "/tmp/$ASSET_NAME" \
                 "${FORK_UPLOAD_URL}?name=$(urlencode "$ASSET_NAME")" \
                 >/dev/null
 
