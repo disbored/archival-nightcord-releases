@@ -104,7 +104,7 @@ jobs:
               echo "    Downloading: $ASSET_NAME"
               curl -fsSL -o "/tmp/$ASSET_NAME" "$ASSET_URL"
 
-              ASSET_SIZE=$(stat -c%s "/tmp/$ASSET_NAME"
+              ASSET_SIZE=$(stat -c%s "/tmp/$ASSET_NAME")
 
               echo "    Uploading:   $ASSET_NAME"
               curl -fsSL \
