@@ -15,7 +15,7 @@ jobs:
       - name: Sync all releases and assets (additive only — never deletes)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UPSTREAM: nightcordoff/nightcord
+          UPSTREAM: nightcordfr/nightcord
           FORK: ${{ github.repository }}
         run: |
           set -euo pipefail
